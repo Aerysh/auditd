@@ -1,0 +1,115 @@
+<Sysmon schemaversion="4.81">
+  <EventFiltering>
+    <!-- Event ID 1 == ProcessCreate -->
+    <RuleGroup name="Process Creation Monitoring" groupRelation="or">
+      <ProcessCreate onmatch="include">
+        <!-- T1021.004: Remote Services (SSH) -->
+        <Rule name="T1021.004 - Remote Services: SSH" groupRelation="and">
+          <Image condition="end with">ssh</Image>
+          <CommandLine condition="contains">ConnectTimeout=</CommandLine>
+          <CommandLine condition="contains">BatchMode=yes</CommandLine>
+          <CommandLine condition="contains">StrictHostKeyChecking=no</CommandLine>
+          <CommandLine condition="contains any">wget;curl</CommandLine>
+        </Rule>
+
+        <!-- T1059.004: Unix Shell -->
+        <Rule name="T1059.004 - Command and Scripting Interpreter: Unix Shell" groupRelation="or">
+          <Image condition="end with">/bin/bash</Image>
+          <Image condition="end with">/bin/dash</Image>
+          <Image condition="end with">/bin/sh</Image>
+          <CommandLine condition="contains any">exec;eval</CommandLine>
+        </Rule>
+
+        <!-- T1070.003: Clear Command History -->
+        <Rule name="T1070.003 - Clear Command History" groupRelation="or">
+          <Image condition="end with">/bin/rm</Image>
+          <CommandLine condition="contains">~/.bash_history</CommandLine>
+        </Rule>
+
+        <!-- T1078: Valid Accounts -->
+        <Rule name="T1078 - Valid Accounts" groupRelation="or">
+          <CommandLine condition="contains any">su;sudo</CommandLine>
+        </Rule>
+
+        <!-- T1548.001: Setuid and Setgid -->
+        <Rule name="T1548.001 - Abuse Elevation Control Mechanism: Setuid and Setgid" groupRelation="or">
+          <Image condition="end with">chmod</Image>
+          <CommandLine condition="contains any">setuid;setgid</CommandLine>
+        </Rule>
+
+        <!-- T1053.003: Cron Jobs -->
+        <Rule name="T1053.003 - Scheduled Task/Job: Cron" groupRelation="or">
+          <Image condition="end with">crontab</Image>
+          <CommandLine condition="contains">/etc/cron</CommandLine>
+        </Rule>
+      </ProcessCreate>
+    </RuleGroup>
+
+    <!-- Event ID 3 == NetworkConnect -->
+    <RuleGroup name="Network Connection Monitoring" groupRelation="or">
+      <NetworkConnect onmatch="include">
+        <!-- T1105: Ingress Tool Transfer -->
+        <Rule name="T1105 - Ingress Tool Transfer" groupRelation="or">
+          <Image condition="end with">wget</Image>
+          <Image condition="end with">curl</Image>
+          <Image condition="end with">scp</Image>
+          <CommandLine condition="contains">--output</CommandLine>
+        </Rule>
+
+        <!-- T1041: Exfiltration Over C2 Channel -->
+        <Rule name="T1041 - Exfiltration Over C2 Channel" groupRelation="or">
+          <DestinationPort condition="is">443</DestinationPort>
+          <DestinationHostname condition="contains">*.xyz</DestinationHostname>
+        </Rule>
+      </NetworkConnect>
+    </RuleGroup>
+
+    <!-- Event ID 5 == ProcessTerminate -->
+    <RuleGroup name="Process Termination Monitoring" groupRelation="or">
+      <ProcessTerminate onmatch="include">
+        <Rule name="General Process Termination" groupRelation="or">
+          <Image condition="end with">kill</Image>
+          <CommandLine condition="contains">-9</CommandLine>
+        </Rule>
+      </ProcessTerminate>
+    </RuleGroup>
+
+    <!-- Event ID 11 == FileCreate -->
+    <RuleGroup name="File Creation Monitoring" groupRelation="or">
+      <FileCreate onmatch="include">
+        <!-- T1037: Boot or Logon Initialization Scripts -->
+        <Rule name="T1037 - Boot or Logon Initialization Scripts" groupRelation="or">
+          <TargetFilename condition="begin with">/etc/init.d/</TargetFilename>
+          <TargetFilename condition="contains">.bashrc</TargetFilename>
+          <TargetFilename condition="begin with">/etc/systemd/system/</TargetFilename>
+        </Rule>
+
+        <!-- T1505.003: Web Shell -->
+        <Rule name="T1505.003 - Web Shell" groupRelation="and">
+          <TargetFilename condition="contains any">.php;.jsp;.aspx</TargetFilename>
+          <ParentImage condition="contains any">apache2;nginx</ParentImage>
+        </Rule>
+      </FileCreate>
+    </RuleGroup>
+
+    <!-- Event ID 23 == FileDelete -->
+    <RuleGroup name="File Deletion Monitoring" groupRelation="or">
+      <FileDelete onmatch="include">
+        <Rule name="Sensitive File Deletion" groupRelation="or">
+          <TargetFilename condition="contains any">/var/log/secure;/var/log/auth.log</TargetFilename>
+        </Rule>
+      </FileDelete>
+    </RuleGroup>
+
+    <!-- Event ID 9 == RawAccessRead -->
+    <RuleGroup name="Raw Disk Access Monitoring" groupRelation="or">
+      <RawAccessRead onmatch="include">
+        <!-- T1003: OS Credential Dumping -->
+        <Rule name="T1003 - OS Credential Dumping" groupRelation="or">
+          <Image condition="end with">/bin/dd</Image>
+          <CommandLine condition="contains">if=/dev/mem</CommandLine>
+        </Rule>
+      </RawAccessRead>
+    </RuleGroup>
+  </EventFiltering>
+</Sysmon>
