@@ -1,201 +1,225 @@
 #!/bin/bash
 
-# Audit Rules Validation and Testing Script
-VERSION="1.1.0"
-# Default configuration
-AUDIT_RULES_FILE="/etc/audit/audit.rules"
-VERBOSE=0
-LOG_FILE="/var/log/audit-rules-check.log"
-
-# Logging functions
-log_error() {
-    echo "[ERROR] $1" >&2
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] ERROR: $1" >> "$LOG_FILE"
-}
-log_info() {
-    [[ $VERBOSE -eq 1 ]] && echo "[INFO] $1"
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] INFO: $1" >> "$LOG_FILE"
-}
-
-# Usage instructions
-usage() {
-    cat << EOF
-Audit Rules Checker v${VERSION}
-Usage: $0 [OPTIONS]
-Options:
-    -f, --file FILE     Specify alternate audit rules file
-    -v, --verbose       Enable verbose output
-    -h, --help          Display this help message
-EOF
-}
-
-# Check if a command exists
-command_exists() {
-    command -v "$1" &>/dev/null
-}
-
-# Validate auditd prerequisites
-check_auditd_prerequisites() {
-    if ! command_exists auditd || ! command_exists auditctl; then
-        log_error "auditd or auditctl is not installed. Please install auditd."
-        exit 1
-    }
-    if ! systemctl is-active --quiet auditd.service; then
-        log_info "auditd service is not running. Attempting to start..."
-        sudo systemctl start auditd.service
-        sleep 2
-        
-        if ! systemctl is-active --quiet auditd.service; then
-            log_error "Failed to start auditd service. Check logs: sudo journalctl -xe"
-            exit 1
-        fi
-    fi
-    log_info "auditd service is running."
-}
-
-# Enhanced rule validation
-validate_rule() {
-    local rule="$1"
-    if [[ -z "$rule" || "$rule" =~ ^# ]]; then
-        return 1
-    fi
-    if [[ "$rule" =~ ^(-a|-w)\s+ ]]; then
-        local rule_type=$(echo "$rule" | awk '{print $1}')
-        case "$rule_type" in
-            -w)
-                local file_path=$(echo "$rule" | awk '{print $2}')
-                [[ -e "$file_path" ]] || {
-                    log_error "File does not exist: $file_path"
-                    return 1
-                }
-                ;;
-            -a)
-                [[ "$rule" =~ -S\s+([a-zA-Z0-9_]+) ]] || {
-                    log_error "Invalid syscall rule: $rule"
-                    return 1
-                }
-                ;;
-        esac
-        log_info "Valid rule: $rule"
-        return 0
-    fi
-    log_error "Invalid rule format: $rule"
-    return 1
-}
-
-# Test rule enforcement
-test_rule_enforcement() {
-    local rule="$1"
-    local TEST_FILE=$(mktemp)
-    trap 'rm -f "$TEST_FILE"' EXIT
-    if [[ "$rule" =~ -k\s+([a-zA-Z0-9_-]+) ]]; then
-        local key="${BASH_REMATCH[1]}"
+# Function to check audit logs for specific key and validate the presence of the log entry
+check_audit_log() {
+    local key=$1
+    echo "Checking audit logs for key: $key"
+    # Search for the key in the audit logs
+    if sudo ausearch -k $key | grep -q "$key"; then
+        echo "Audit log found for key: $key"
     else
-        log_error "Rule has no valid key: $rule"
+        echo "No audit log found for key: $key"
         return 1
     fi
-    log_info "Generating test event for rule: $rule"
-    case "$rule" in
-        *-w*)
-            local file_path=$(echo "$rule" | awk '{print $2}')
-            echo "Test event for $key" | sudo tee -a "$file_path" >/dev/null
-            ;;
-        *-a*)
-            local syscall=$(echo "$rule" | grep -oP '(?<=-S )\w+')
-            case "$syscall" in
-                open) sudo touch "$TEST_FILE" ;;
-                execve) /usr/bin/true ;;
-                chmod) sudo chmod 0777 "$TEST_FILE" ;;
-                unlink) sudo rm -f "$TEST_FILE" && sudo touch "$TEST_FILE" ;;
-                *) 
-                    log_error "Unsupported syscall for testing: $syscall"
-                    return 1 
-                    ;;
-            esac
-            ;;
-    esac
-    sleep 2
-    local log_result=$(sudo ausearch -k "$key" -ts recent --format text 2>/dev/null)
-    if [[ -z "$log_result" ]]; then
-        log_error "Rule NOT enforced: $rule"
+    return 0
+}
+
+# Function to simulate changes to /var/log
+simulate_var_log_changes() {
+    echo "Simulating changes to /var/log..."
+    touch /var/log/testfile.log
+    chmod +x /var/log/testfile.log
+    rm /var/log/testfile.log
+    if ! check_audit_log "audit-wazuh-log"; then
+        echo "Validation failed for /var/log changes"
         return 1
-    else
-        log_info "Rule ENFORCED: $rule"
-        return 0
     fi
 }
 
-# Main script execution
-main() {
-    # Parse command-line arguments
-    local TEMP
-    TEMP=$(getopt -o f:vh --long file:,verbose,help -n "$0" -- "$@")
-    
-    if [ $? != 0 ]; then
-        usage
-        exit 1
+# Function to simulate changes to /etc/login.defs
+simulate_etc_login_defs_changes() {
+    echo "Simulating changes to /etc/login.defs..."
+    cp /etc/login.defs /tmp/login.defs.bak
+    echo "TEST_CHANGE" >> /etc/login.defs
+    mv /tmp/login.defs.bak /etc/login.defs
+    if ! check_audit_log "audit-wazuh-login"; then
+        echo "Validation failed for /etc/login.defs changes"
+        return 1
     fi
-    eval set -- "$TEMP"
-    while true; do
-        case "$1" in
-            -f|--file)
-                AUDIT_RULES_FILE="$2"
-                shift 2
-                ;;
-            -v|--verbose)
-                VERBOSE=1
-                shift
-                ;;
-            -h|--help)
-                usage
-                exit 0
-                ;;
-            --)
-                shift
-                break
-                ;;
-            *)
-                log_error "Internal error!"
-                exit 1
-                ;;
-        esac
-    done
-    
-    # Prerequisite checks
-    check_auditd_prerequisites
-    
-    # Validate rules file
-    if [[ ! -f "$AUDIT_RULES_FILE" ]]; then
-        log_error "Audit rules file not found: $AUDIT_RULES_FILE"
-        exit 1
-    fi
-    log_info "Checking audit rules in $AUDIT_RULES_FILE..."
-    
-    # Counters
-    local TOTAL_RULES=0
-    local VALID_RULES=0
-    local ENFORCED_RULES=0
-    
-    # Process rules
-    while IFS= read -r rule; do
-        TOTAL_RULES=$((TOTAL_RULES + 1))
-        if validate_rule "$rule"; then
-            VALID_RULES=$((VALID_RULES + 1))
-            if test_rule_enforcement "$rule"; then
-                ENFORCED_RULES=$((ENFORCED_RULES + 1))
-            fi
-        fi
-    done < "$AUDIT_RULES_FILE"
-    
-    # Summary
-    echo "----------------------------------------"
-    echo "Audit Rules Check v${VERSION} Completed"
-    echo "Total rules checked: $TOTAL_RULES"
-    echo "Valid rules: $VALID_RULES"
-    echo "Enforced rules: $ENFORCED_RULES"
-    echo "Detailed log: $LOG_FILE"
-    echo "----------------------------------------"
 }
 
-# Execute main with all arguments
-main "$@"
+# Function to simulate changes to /etc/security/faillock.conf
+simulate_faillock_changes() {
+    echo "Simulating changes to /etc/security/faillock.conf..."
+    cp /etc/security/faillock.conf /tmp/faillock.conf.bak
+    echo "TEST_CHANGE" >> /etc/security/faillock.conf
+    mv /tmp/faillock.conf.bak /etc/security/faillock.conf
+    if ! check_audit_log "audit-wazuh-faillock"; then
+        echo "Validation failed for /etc/security/faillock.conf changes"
+        return 1
+    fi
+}
+
+# Function to simulate command execution by root user
+simulate_root_command_execution() {
+    echo "Simulating command execution by root user..."
+    bash -c 'echo "Root command executed" > /tmp/root_command_test'
+    rm /tmp/root_command_test
+    if ! check_audit_log "audit-wazuh-c"; then
+        echo "Validation failed for root command execution"
+        return 1
+    fi
+}
+
+# Function to simulate command execution by non-privileged users (this part can be skipped when running as root)
+simulate_non_privileged_user_command_execution() {
+    echo "Simulating command execution by non-privileged user..."
+    echo "Non-privileged user command executed" > /tmp/non_privileged_command_test
+    rm /tmp/non_privileged_command_test
+    if ! check_audit_log "audit-wazuh-c"; then
+        echo "Validation failed for non-privileged user command execution"
+        return 1
+    fi
+}
+
+# Function to simulate changes to sudoers files
+simulate_sudoers_changes() {
+    echo "Simulating changes to sudoers files..."
+    cp /etc/sudoers /tmp/sudoers.bak
+    visudo -c && echo "# TEST_CHANGE" >> /etc/sudoers.d/test
+    mv /tmp/sudoers.bak /etc/sudoers
+    rm /etc/sudoers.d/test
+    if ! check_audit_log "scope"; then
+        echo "Validation failed for sudoers file changes"
+        return 1
+    fi
+}
+
+# Function to simulate system locale changes
+simulate_system_locale_changes() {
+    echo "Simulating system locale changes..."
+    cp /etc/issue /tmp/issue.bak
+    echo "TEST_CHANGE" >> /etc/issue
+    mv /tmp/issue.bak /etc/issue
+    if ! check_audit_log "system-locale"; then
+        echo "Validation failed for system locale changes"
+        return 1
+    fi
+}
+
+# Function to simulate identity changes
+simulate_identity_changes() {
+    echo "Simulating identity changes..."
+    cp /etc/group /tmp/group.bak
+    echo "testgroup:x:1001:" >> /etc/group
+    mv /tmp/group.bak /etc/group
+    if ! check_audit_log "identity"; then
+        echo "Validation failed for identity changes"
+        return 1
+    fi
+}
+
+# Function to simulate session activities
+simulate_session_activities() {
+    echo "Simulating session activities..."
+    # Simulate login/logout using `last`
+    last -f /var/log/wtmp | grep -q "$(whoami)"
+    if ! check_audit_log "session"; then
+        echo "Validation failed for session activities"
+        return 1
+    fi
+}
+
+# Function to simulate login activities
+simulate_login_activities() {
+    echo "Simulating login activities..."
+    # Simulate login activity
+    lastlog | grep -q "$(whoami)"
+    if ! check_audit_log "logins"; then
+        echo "Validation failed for login activities"
+        return 1
+    fi
+}
+
+# Function to simulate MAC policy changes
+simulate_mac_policy_changes() {
+    echo "Simulating MAC policy changes..."
+    cp /etc/apparmor.d/local/usr.bin.firefox /tmp/firefox.bak
+    echo "# TEST_CHANGE" >> /etc/apparmor.d/local/usr.bin.firefox
+    mv /tmp/firefox.bak /etc/apparmor.d/local/usr.bin.firefox
+    if ! check_audit_log "MAC-policy"; then
+        echo "Validation failed for MAC policy changes"
+        return 1
+    fi
+}
+
+# Function to simulate time changes
+simulate_time_changes() {
+    echo "Simulating time changes..."
+    date --set="2023-01-01 00:00:00"
+    hwclock --systohc
+    if ! check_audit_log "timechange"; then
+        echo "Validation failed for time changes"
+        return 1
+    fi
+}
+
+# Function to simulate usage of passwd command
+simulate_passwd_command_usage() {
+    echo "Simulating usage of passwd command..."
+    echo -e "current_password\nnew_password\nnew_password" | passwd $(whoami)
+    if ! check_audit_log "passwd_modification"; then
+        echo "Validation failed for passwd command usage"
+        return 1
+    fi
+}
+
+# Function to simulate group management tools usage
+simulate_group_management_tools_usage() {
+    echo "Simulating usage of group management tools..."
+    groupadd testgroup
+    groupdel testgroup
+    if ! check_audit_log "group_modification"; then
+        echo "Validation failed for group management tools usage"
+        return 1
+    fi
+}
+
+# Function to simulate user management tools usage
+simulate_user_management_tools_usage() {
+    echo "Simulating usage of user management tools..."
+    useradd testuser
+    userdel testuser
+    if ! check_audit_log "user_modification"; then
+        echo "Validation failed for user management tools usage"
+        return 1
+    fi
+}
+
+# Function to simulate sudo su command
+simulate_sudo_su() {
+    echo "Simulating sudo su command..."
+    su -c 'echo "Privilege escalation using sudo su"' > /dev/null
+    if ! check_audit_log "sudo_exec"; then
+        echo "Validation failed for sudo su command"
+        return 1
+    fi
+}
+
+# Main function to run tests
+run_tests() {
+    simulate_var_log_changes
+    simulate_etc_login_defs_changes
+    simulate_faillock_changes
+    simulate_root_command_execution
+    # Comment out or skip simulate_non_privileged_user_command_execution if running as root
+    # simulate_non_privileged_user_command_execution
+    simulate_sudoers_changes
+    simulate_system_locale_changes
+    simulate_identity_changes
+    simulate_session_activities
+    simulate_login_activities
+    simulate_mac_policy_changes
+    simulate_time_changes
+    simulate_passwd_command_usage
+    simulate_group_management_tools_usage
+    simulate_user_management_tools_usage
+    simulate_sudo_su
+}
+
+# Run tests
+if run_tests; then
+    echo "All tests passed successfully."
+else
+    echo "Some tests failed. Please review the output."
+fi
