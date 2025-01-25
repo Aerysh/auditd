@@ -77,16 +77,16 @@ echo "Verifying installation..."
 sudo systemctl status auditd
 
 # Install custom auditd rules
-AUDIT_RULES_FILE="auditd_rules.conf"
-AUDIT_RULES_PATH="/etc/audit/rules.d/audit.rules"
+# AUDIT_RULES_FILE="auditd_rules.conf"
+# AUDIT_RULES_PATH="/etc/audit/rules.d/audit.rules"
 
-if [ -f "$AUDIT_RULES_FILE" ]; then
-    echo "Installing custom auditd rules..."
-    sudo cp "$AUDIT_RULES_FILE" "$AUDIT_RULES_PATH"
-    sudo augenrules --load
-    echo "Custom auditd rules installed and loaded."
-else
-    echo "Custom auditd rules file ($AUDIT_RULES_FILE) not found. Skipping rules installation."
-fi
+# if [ -f "$AUDIT_RULES_FILE" ]; then
+#     echo "Installing custom auditd rules..."
+#     sudo cp "$AUDIT_RULES_FILE" "$AUDIT_RULES_PATH"
+#     sudo augenrules --load
+#     echo "Custom auditd rules installed and loaded."
+# else
+#     echo "Custom auditd rules file ($AUDIT_RULES_FILE) not found. Skipping rules installation."
+# fi
 
-echo "auditd installation completed successfully!"
+# echo "auditd installation completed successfully!"
