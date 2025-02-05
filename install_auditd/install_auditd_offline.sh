@@ -76,7 +76,7 @@ sudo systemctl start auditd
 echo "Verifying installation..."
 sudo systemctl status auditd
 
-Install custom auditd rules
+#Install custom auditd rules
 AUDIT_RULES_FILE="auditd_rules.conf"
 AUDIT_RULES_PATH="/etc/audit/rules.d/audit.rules"
 
