@@ -1,11 +1,46 @@
-# Security-Enchancement
+# auditd auto install
 
-This repository contains a collection of security rules and configurations designed to enhance the detection and monitoring capabilities of your security infrastructure. The rules are tailored for use with:
+## Requirements
 
-Wazuh: A free and open-source security monitoring platform.
+- Linux based system (Debian/Ubuntu, RHEL/CentOS, Fedora, etc.)
+- `sudo` privileges
 
-Sysmon: A system monitoring tool for Windows and Linux.
+## Installation
 
-auditd: The Linux audit daemon for monitoring system calls and file access.
+1. Clone the Repository
 
-These rules are aligned with the MITRE ATT&CK framework and are designed to detect common adversarial techniques and behaviors.
+```bash
+git clone https://github.com/Aerysh/auditd.git
+cd auditd
+```
+
+2. Run the installation script
+
+```bash
+chmod +x install.sh
+sudo ./install.sh
+```
+
+3. Check if environments need reboot
+
+```bash
+if [[ $(auditctl -s | grep "enabled") =~ "2" ]]; then printf "Reboot required to load rules\n"; fi
+```
+
+## Verification
+
+After installation, verify that `auditd` service is active:
+
+```bash
+sudo systemctl status auditd.service
+```
+
+Then confirm that audit rules have been loaded:
+
+```bash
+sudo auditctl -l
+```
+
+## Notes
+
+- The script modify system audit rules. Review `install.sh` before running in production environments.
